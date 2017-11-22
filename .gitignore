@@ -1,0 +1,11 @@
+avrnacl-20140813/
+*.asv
+*.csv
+rust_home/
+*.bak
+*.bck
+smart_relay/eepromprogrammer
+*.hex
+.vs/
+Release/
+Debug/
