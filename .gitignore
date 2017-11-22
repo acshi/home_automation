@@ -9,3 +9,4 @@ smart_relay/eepromprogrammer
 .vs/
 Release/
 Debug/
+*-cache.lib
