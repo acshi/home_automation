@@ -1,0 +1,4 @@
+(fp_lib_table
+  (lib (name LatchingRelay)(type KiCad)(uri "$(KIPRJMOD)/LatchingRelay.pretty")(options "")(descr ""))
+  (lib (name BatteryHolder)(type KiCad)(uri "$(KIPRJMOD)/BatteryHolder.pretty")(options "")(descr ""))
+)
