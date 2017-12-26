@@ -132,11 +132,15 @@ module case_top() {
                     }
         }
         translate([case_w/2-ac_top_l/2, case_h/2-ac_h/2-ac_offset_y/2, case_t - ac_depth + 0.001])
-            ac_socket(false);
+            %ac_socket(false);
         translate([case_w/2, case_h/2, case_t-wall_t])
             cylinder(r=2, h=wall_t);
         translate([case_w/2, case_h/2, case_t-wall_t/2])
             cylinder(r=4, h=wall_t/2);
+        translate([case_w/2-24, 20, case_t-wall_t])
+            cylinder(r=3, h=wall_t);
+        translate([case_w/2+24, 20, case_t-wall_t])
+            cylinder(r=3, h=wall_t);
     }
     translate([case_w/2-latch_w1/2, latch_t, case_t])
             latch();
