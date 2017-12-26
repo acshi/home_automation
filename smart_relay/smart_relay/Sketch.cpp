@@ -1,34 +1,17 @@
 /*
- * smart_relay.c
+ * Skepth.cpp
  *
  * Created: 8/22/2017 10:06:12 PM
  * Author : Acshi
  */
 
-#define SENDING_ARDUINO
-
-#include "Arduino.h"
-#include "Streaming.h"
-#include "IRremote.h"
-#include "IRremote/boarddefs.h"
-#include "EEPROM.h"
-
-extern "C" {
-    #include "avrnacl.h"
-};
+ #include "smart_relay.h"
+ #include "manager.h"
+ #include "leaf.h"
+ #include "EEPROM.h"
 
 // encryption related...
-uint8_t secretKey[crypto_secretbox_KEYBYTES];
 uint8_t nonce[crypto_secretbox_NONCEBYTES] = { 169, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123};
-
-uint16_t deviceAddress;
-
-#define ADDRESS_LENGTH 2
-#define DATA_LENGTH 4
-#define CONTENT_MSG_LENGTH (ADDRESS_LENGTH + ADDRESS_LENGTH + DATA_LENGTH)
-#define CIPHER_LENGTH (crypto_secretbox_ZEROBYTES + CONTENT_MSG_LENGTH)
-#define INNER_CIPHER_LENGTH (CIPHER_LENGTH - crypto_secretbox_BOXZEROBYTES)
-#define TOTAL_MSG_LENGTH (crypto_secretbox_NONCEBYTES + INNER_CIPHER_LENGTH)
 
 uint8_t contentMessage[CIPHER_LENGTH];
 uint8_t contentCipher[CIPHER_LENGTH];
@@ -63,29 +46,24 @@ volatile uint8_t irRecvBitI = 0;
 volatile uint16_t irTickMark = 0;
 volatile bool irTickMarkReady = false;
 
-#define RELAY_A_SET_PIN 5
-#define RELAY_B_SET_PIN 6
 #define NOISE_APIN 0
 
-bool relayAState = false;
-bool relayBState = false;
+EepromData eepromData;
 
-void prepareContentMessage(uint16_t toAddress, uint16_t fromAddress, uint8_t *dataMessage) {
+void prepareContentMessage(uint16_t deviceAddress, uint8_t *dataMessage) {
     for (uint8_t i = 0; i < crypto_secretbox_ZEROBYTES; i++) {
         contentMessage[i] = 0;
     }
 
     uint16_t msgI = crypto_secretbox_ZEROBYTES;
 
-    contentMessage[msgI++] = (toAddress >> 8) & 0xff;
-    contentMessage[msgI++] = toAddress & 0xff;
-    contentMessage[msgI++] = (fromAddress >> 8) & 0xff;
-    contentMessage[msgI++] = fromAddress & 0xff;
+    contentMessage[msgI++] = (deviceAddress >> 8) & 0xff;
+    contentMessage[msgI++] = deviceAddress & 0xff;
     for (uint8_t i = 0; i < DATA_LENGTH; i++) {
         contentMessage[msgI++] = dataMessage[i];
     }
 
-    crypto_secretbox(contentCipher, contentMessage, CIPHER_LENGTH, nonce, secretKey);
+    crypto_secretbox(contentCipher, contentMessage, CIPHER_LENGTH, nonce, eepromData.key);
 }
 
 void advanceNonce() {
@@ -115,8 +93,8 @@ void sendIrBytes(uint8_t *bytes, uint16_t numBytes) {
     //Serial << endl;
 }
 
-void sendMessage(uint16_t toAddress, uint16_t fromAddress, uint8_t* dataMessage) {
-    prepareContentMessage(toAddress, fromAddress, dataMessage);
+void sendMessage(uint16_t deviceAddress, uint8_t* dataMessage) {
+    prepareContentMessage(deviceAddress, dataMessage);
 
     irSend.enableIROut(38);
 
@@ -139,30 +117,8 @@ bool decryptMessage(uint8_t *receiveBuffer) {
         contentCipher[crypto_secretbox_BOXZEROBYTES + i] = receiveBuffer[crypto_secretbox_NONCEBYTES + i];
     }
     uint8_t *receivedNonce = (uint8_t*)irRecvBuffer;
-    int status = crypto_secretbox_open(contentMessage, contentCipher, CIPHER_LENGTH, receivedNonce, secretKey);
+    int status = crypto_secretbox_open(contentMessage, contentCipher, CIPHER_LENGTH, receivedNonce, eepromData.key);
     return status == 0; // true on success
-}
-
-void handleAuthenticatedMsg(uint16_t toAddress, uint16_t fromAddress, uint8_t* dataMessage) {
-    Serial << "Received authenticated message to " << toAddress << " from " << fromAddress << endl;
-    Serial << "Data bytes: ";
-    for (uint8_t i = 0; i < DATA_LENGTH; i++) {
-        Serial << dataMessage[i] << ", ";
-    }
-    Serial << endl;
-
-    if (toAddress != deviceAddress) {
-        Serial << "Message was not for us!\n";
-        return;
-    }
-
-    uint8_t duplicateMessage[DATA_LENGTH];
-    for (uint8_t i = 0; i < DATA_LENGTH; i++) {
-        duplicateMessage[i] = dataMessage[i];
-    }
-
-    Serial << "Responding with duplicate message\n";
-    sendMessage(fromAddress, deviceAddress, duplicateMessage);
 }
 
 // resolve these early on to have the portability of Arduino, but the speed of native use
@@ -202,13 +158,15 @@ bool irTryParse() {
     }
 
     uint8_t msgI = crypto_secretbox_ZEROBYTES;
-    uint16_t toAdr = (contentMessage[msgI] << 8) | contentMessage[msgI + 1];
-    msgI += 2;
-    uint16_t fromAdr = (contentMessage[msgI] << 8) | contentMessage[msgI + 1];
+    uint16_t deviceAdress = (contentMessage[msgI] << 8) | contentMessage[msgI + 1];
     msgI += 2;
 
-    handleAuthenticatedMsg(toAdr, fromAdr, &contentMessage[msgI]);
-
+    if (eepromData.isManager) {
+        managerHandleAuthenticatedMsg(&eepromData, deviceAdress, &contentMessage[msgI]);
+    } else {
+        leafHandleAuthenticatedMsg(&eepromData, deviceAdress, &contentMessage[msgI]);
+    }
+    
     irResume();
     return true;
 }
@@ -313,21 +271,36 @@ ISR (TIMER_INTR_NAME)
 }
 
 void initializeFromEeprom() {
-    deviceAddress = (EEPROM.read(0) << 8) | EEPROM.read(1);
-    Serial << "Device address: " << deviceAddress << endl;
-
-    //Serial << "Reading encryption key:\n";
-    for (uint8_t i = 0; i < crypto_secretbox_KEYBYTES; i++) {
-        secretKey[i] = EEPROM.read(2 + i);
-        //Serial << secretKey[i] << endl;
+    EEPROM.get(0, eepromData);
+    Serial << "Base Id: " << eepromData.baseId << endl;
+    Serial << "Is manager: " << eepromData.isManager << endl;
+    Serial << "Num devices: " << eepromData.numDevices << endl;
+    for (uint8_t i = 0; i < eepromData.numDevices; i++) {
+        Serial << "Device " << i << " type: ";
+        switch (eepromData.deviceTypes[i]) {
+            case DEVICE_RELAY_A:
+                Serial << "relay A";
+                break;
+            case DEVICE_RELAY_B:
+                Serial << "relay B";
+                break;
+            case DEVICE_UNUSED:
+                Serial << "unused";
+                break;
+            default:
+                Serial << "unknown";
+                break;
+        }
+        Serial << endl;
     }
-    //Serial << "Done\n";
+    Serial << endl;
 }
 
 byte rand_byte() {
     byte val = 0;
     byte bit_i = 0;
     while (bit_i < 8) {
+        // note: the noise circuit gives noise only in the first three bits.
         byte a = (byte)analogRead(NOISE_APIN);
         byte b = (byte)analogRead(NOISE_APIN);
 
@@ -344,76 +317,33 @@ byte rand_byte() {
     return val;
 }
 
+void randomize_nonce() {
+    for (uint8_t i = 0; i < crypto_secretbox_NONCEBYTES; i++) {
+        nonce[i] = rand_byte();
+    }
+}
+
+void ir_debug() {
+    Serial << "irRecvI: " << irRecvI << " irRecvState: " << irRecvState << " irTicks: " << irTicks << " irVal: " << readIr() << endl;
+    //Serial << irRecvState << " " << irVal << endl;
+}
+
 void setup() {
     Serial.begin(250000);
+    Serial.setTimeout(10);
 
     initializeFromEeprom();
 
     irRecvRegBit = resolvePinBit(IR_RECV_PIN);
     irRecvReg = resolvePinInputRegister(IR_RECV_PIN);
 
-    pinMode(RELAY_A_SET_PIN, OUTPUT);
-    pinMode(RELAY_B_SET_PIN, OUTPUT);
-
     irResume();
 }
 
-void managerLoop() {
-    static uint32_t lastCheckMs = millis();
-    uint32_t nowMs = millis();
-
-    if (nowMs > lastCheckMs + 100) {
-        lastCheckMs = nowMs;
-        Serial << "irRecvI: " << irRecvI << " irRecvState: " << irRecvState << " irTicks: " << irTicks << " irVal: " << readIr() << endl;
-        //Serial << irRecvState << " " << irVal << endl;
-    }
-
-    static uint32_t lastSendMs = millis();
-    if (nowMs > lastSendMs + 2000) {
-        lastSendMs = nowMs;
-        Serial << "Sending message...\n";
-        //Serial << "nonce is...\n";
-        //for (uint8_t i = 0; i < crypto_secretbox_NONCEBYTES; i++) {
-        //Serial << nonce[i] << endl;
-        //}
-        //Serial << "Done\n";
-        static uint8_t data[4] = { 1, 2, 3, 4 };
-        sendMessage(1, deviceAddress, data);
-        //advanceNonce();
-        irResume();
-    }
-}
-
-void leafLoop() {
-    irTryParse();
-
-    static int32_t attempts = 0;
-    if (irTickMarkReady) {
-        irTickMarkReady = false;
-        Serial << irTickMark << ':' << attempts;// << endl;
-        Serial << " recvI: " << irRecvI << " bit#: " << irRecvBitI << " val: " << irRecvBuffer[irRecvI] << endl;
-        attempts = 0;
-    } else {
-        attempts++;
-    }
-}
-
 void loop() {
-    //int c = Serial.read();
-    //if (c == 'a') {
-        //relayAState = !relayAState;
-        //digitalWrite(RELAY_A_SET_PIN, relayAState);
-        //Serial << "Relay A state: " << relayAState << endl;
-    //} else if (c == 'b') {
-        //relayBState = !relayBState;
-        //digitalWrite(RELAY_B_SET_PIN, relayBState);
-        //Serial << "Relay B state: " << relayBState << endl;
-    //}
-    //return;
-
-    if (deviceAddress == 0) {
-        managerLoop();
+    if (eepromData.isManager) {
+        managerLoop(&eepromData);
     } else {
-        leafLoop();
+        leafLoop(&eepromData);
     }
 }

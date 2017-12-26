@@ -10,3 +10,6 @@ smart_relay/eepromprogrammer
 Release/
 Debug/
 *-cache.lib
+kicad/gerbers
+kicad/gerbers.zip
+*.kicad_pcb-bak
