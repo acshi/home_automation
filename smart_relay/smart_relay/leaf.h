@@ -11,8 +11,9 @@
 #include "Arduino.h"
 #include "smart_relay.h"
 
-void leafSetCommand(EepromData *eepromData, uint16_t deviceAddress, int16_t value);
-void leafHandleAuthenticatedMsg(EepromData *eepromData, uint16_t deviceAddress, uint8_t *dataMessage);
+void leafSetCommand(EepromData *eepromData, uint32_t deviceAddress, int32_t value);
+int32_t leafReadCommand(EepromData *eepromData, uint32_t deviceAddress);
+void leafHandleAuthenticatedMsg(EepromData *eepromData, uint32_t deviceAddress, uint8_t *dataMessage);
 void leafSetup(EepromData *eepromData);
 void leafLoop(EepromData *eepromData);
 

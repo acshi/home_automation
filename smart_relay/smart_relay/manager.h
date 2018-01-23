@@ -11,7 +11,7 @@
 #include "Arduino.h"
 #include "smart_relay.h"
 
-void managerHandleAuthenticatedMsg(EepromData *eepromData, uint16_t deviceAddress, uint8_t *dataMessage);
+void managerHandleAuthenticatedMsg(EepromData *eepromData, uint32_t deviceAddress, uint8_t *dataMessage);
 void managerSetup(EepromData *eepromData);
 void managerLoop(EepromData *eepromData);
 

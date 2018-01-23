@@ -10,6 +10,8 @@
  #include "leaf.h"
  #include "EEPROM.h"
 
+ const char *DEVICE_NAMES[] = {"Unused", "Relay A", "Relay B", "Latching relay A", "Latching relay B"};
+
 // encryption related...
 uint8_t nonce[crypto_secretbox_NONCEBYTES] = { 169, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123};
 
@@ -26,13 +28,19 @@ IRrecv irRecv(IR_RECV_PIN);
 uint8_t irRecvRegBit;
 volatile uint8_t *irRecvReg;
 
-#define START_ON_TIME 2400
-#define ZERO_ON_TIME 800
-#define ONE_ON_TIME 1600
-#define OFF_TIME 200
+// on times seem to generally be measured as +- 100us
+#define START_ON_TIME 1000//2400
+#define ONE_ON_TIME 580//1600
+#define ZERO_ON_TIME 260//800
+#define OFF_TIME 260 // as low as possible to guarantee on-times don't fuse together
+#define SPURIOUS_TIME -100 // if closer to this than to OFF_TIME, the "tick" is ignored
 #define START_ON_TICKS (START_ON_TIME/USECPERTICK)
-#define ZERO_ON_TICKS (ZERO_ON_TIME/USECPERTICK)
 #define ONE_ON_TICKS (ONE_ON_TIME/USECPERTICK)
+#define ZERO_ON_TICKS (ZERO_ON_TIME/USECPERTICK)
+#define SPURIOUS_TICKS (SPURIOUS_TIME/USECPERTICK)
+
+#define BIAS_TIME -20 // actual high/mark lengths are generally measured as having this value added to them (should be negative)
+#define BIAS_TICKS (BIAS_TIME/USECPERTICK)
 
 volatile uint16_t irTicks = 0;
 volatile uint8_t irRecvState = STATE_IDLE;
@@ -50,13 +58,15 @@ volatile bool irTickMarkReady = false;
 
 EepromData eepromData;
 
-void prepareContentMessage(uint16_t deviceAddress, uint8_t *dataMessage) {
+void prepareContentMessage(uint32_t deviceAddress, uint8_t *dataMessage) {
     for (uint8_t i = 0; i < crypto_secretbox_ZEROBYTES; i++) {
         contentMessage[i] = 0;
     }
 
     uint16_t msgI = crypto_secretbox_ZEROBYTES;
 
+    contentMessage[msgI++] = (deviceAddress >> 24) & 0xff;
+    contentMessage[msgI++] = (deviceAddress >> 16) & 0xff;
     contentMessage[msgI++] = (deviceAddress >> 8) & 0xff;
     contentMessage[msgI++] = deviceAddress & 0xff;
     for (uint8_t i = 0; i < DATA_LENGTH; i++) {
@@ -64,16 +74,6 @@ void prepareContentMessage(uint16_t deviceAddress, uint8_t *dataMessage) {
     }
 
     crypto_secretbox(contentCipher, contentMessage, CIPHER_LENGTH, nonce, eepromData.key);
-}
-
-void advanceNonce() {
-    // effectively nonce += 1
-    for (uint8_t i = 0; i < crypto_secretbox_NONCEBYTES; i++) {
-        nonce[i]++;
-        if (nonce[i] != 0) {
-            break;
-        }
-    }
 }
 
 void sendIrBytes(uint8_t *bytes, uint16_t numBytes) {
@@ -93,10 +93,18 @@ void sendIrBytes(uint8_t *bytes, uint16_t numBytes) {
     //Serial << endl;
 }
 
-void sendMessage(uint16_t deviceAddress, uint8_t* dataMessage) {
+void irResume() {
+    for (uint8_t i = 0; i < sizeof(irRecvBuffer); i++) {
+        irRecvBuffer[i] = 0;
+    }
+    irRecvState = STATE_IDLE;
+    irRecv.enableIRIn();
+}
+
+void sendMessage(uint32_t deviceAddress, uint8_t* dataMessage) {
     prepareContentMessage(deviceAddress, dataMessage);
 
-    irSend.enableIROut(38);
+    irSend.enableIROut(38); // 38khz
 
     irSend.mark(START_ON_TIME);
     irSend.space(OFF_TIME);
@@ -107,6 +115,7 @@ void sendMessage(uint16_t deviceAddress, uint8_t* dataMessage) {
     sendIrBytes(contentCipher + crypto_secretbox_BOXZEROBYTES, INNER_CIPHER_LENGTH);
 
     irSend.space(0);
+    irResume();
 }
 
 bool decryptMessage(uint8_t *receiveBuffer) {
@@ -118,7 +127,13 @@ bool decryptMessage(uint8_t *receiveBuffer) {
     }
     uint8_t *receivedNonce = (uint8_t*)irRecvBuffer;
     int status = crypto_secretbox_open(contentMessage, contentCipher, CIPHER_LENGTH, receivedNonce, eepromData.key);
-    return status == 0; // true on success
+    bool success = status == 0;
+    if (success && !eepromData.isManager) {
+        for (uint8_t i = 0; i < crypto_secretbox_NONCEBYTES; i++) {
+            nonce[i] = receivedNonce[i];
+        }
+    }
+    return success; // true on success
 }
 
 // resolve these early on to have the portability of Arduino, but the speed of native use
@@ -130,19 +145,17 @@ uint8_t resolvePinBit(uint8_t pin) {
     return digitalPinToBitMask(pin);
 }
 
-void irResume() {
-    for (uint8_t i = 0; i < sizeof(irRecvBuffer); i++) {
-        irRecvBuffer[i] = 0;
-    }
-    irRecvState = STATE_IDLE;
-    irRecv.enableIRIn();
-}
-
 bool irTryParse() {
     if (irRecvState != STATE_STOP || !irRecvReady) {
         return false;
     }
     irRecvReady = false;
+
+    // blank "message" -- probably noise
+    if (irRecvI == 0) {
+        irResume();
+        return false;
+    }
 
     Serial << "IR entered stop state with recvBit of " << irRecvI << endl;
 
@@ -158,13 +171,13 @@ bool irTryParse() {
     }
 
     uint8_t msgI = crypto_secretbox_ZEROBYTES;
-    uint16_t deviceAdress = (contentMessage[msgI] << 8) | contentMessage[msgI + 1];
-    msgI += 2;
+    uint32_t deviceAddress = ((uint32_t)contentMessage[msgI] << 24) | ((uint32_t)contentMessage[msgI + 1] << 16) | ((uint16_t)contentMessage[msgI + 2] << 8) | contentMessage[msgI + 3];
+    msgI += 4;
 
     if (eepromData.isManager) {
-        managerHandleAuthenticatedMsg(&eepromData, deviceAdress, &contentMessage[msgI]);
+        managerHandleAuthenticatedMsg(&eepromData, deviceAddress, &contentMessage[msgI]);
     } else {
-        leafHandleAuthenticatedMsg(&eepromData, deviceAdress, &contentMessage[msgI]);
+        leafHandleAuthenticatedMsg(&eepromData, deviceAddress, &contentMessage[msgI]);
     }
     
     irResume();
@@ -175,7 +188,7 @@ uint8_t readIr() {
     return (uint8_t)(*irRecvReg & irRecvRegBit ? HIGH : LOW);
 }
 
-#define MATCH_TICKS_CENTER_VAL(ticks, low, val, high) (ticks >= (low + val) / 2 && ticks <= (val + high) / 2)
+#define MATCH_TICKS_CENTER_VAL(ticks, low, val, high) (2 * ticks - (2 * BIAS_TICKS) >= low + val && 2 * ticks <= val + high)
 
 // specialized form of the interrupt vector in IRremote.cpp
 ISR (TIMER_INTR_NAME)
@@ -184,8 +197,7 @@ ISR (TIMER_INTR_NAME)
 
     // Read if IR Receiver -> SPACE [xmt LED off] or a MARK [xmt LED on]
     uint8_t  irVal = readIr();
-
-    irTicks++;  // One more 50uS tick
+    irTicks++;  // One more tick (on the order of 50us, check USECPERTICK)
 
     switch(irRecvState) {
     //......................................................................
@@ -201,6 +213,7 @@ ISR (TIMER_INTR_NAME)
     //......................................................................
     case STATE_MARK:  // Timing Mark
         if (irVal == SPACE) {   // Mark ended; Record time
+            //Serial << irTicks * USECPERTICK << endl;
             if (!irTickMarkReady) {
                 irTickMark = irTicks;
                 irTickMarkReady = true;
@@ -216,6 +229,12 @@ ISR (TIMER_INTR_NAME)
             if (!irReceiving) {
                 return;
             }
+
+            if (irTicks <= 1) {
+                // spurious; try to pretend it is still high!
+                return;
+            }
+
             if (MATCH_TICKS_CENTER_VAL(irTicks, ZERO_ON_TICKS, ONE_ON_TICKS, START_ON_TICKS)) {
                 irRecvBuffer[irRecvI] += 1 << irRecvBitI;
                 irRecvBitI++;
@@ -223,7 +242,7 @@ ISR (TIMER_INTR_NAME)
                     irRecvBitI = 0;
                     irRecvI++;
                 }
-            } else if (MATCH_TICKS_CENTER_VAL(irTicks, 0, ZERO_ON_TICKS, ONE_ON_TICKS)) {
+            } else if (MATCH_TICKS_CENTER_VAL(irTicks, SPURIOUS_TICKS, ZERO_ON_TICKS, ONE_ON_TICKS)) {
                 irRecvBitI++;
                 if (irRecvBitI == 8) {
                     irRecvBitI = 0;
@@ -274,29 +293,21 @@ void initializeFromEeprom() {
     EEPROM.get(0, eepromData);
     Serial << "Base Id: " << eepromData.baseId << endl;
     Serial << "Is manager: " << eepromData.isManager << endl;
-    Serial << "Num devices: " << eepromData.numDevices << endl;
+    Serial << "Number of devices: " << eepromData.numDevices << endl;
     for (uint8_t i = 0; i < eepromData.numDevices; i++) {
         Serial << "Device " << i << " type: ";
-        switch (eepromData.deviceTypes[i]) {
-            case DEVICE_RELAY_A:
-                Serial << "relay A";
-                break;
-            case DEVICE_RELAY_B:
-                Serial << "relay B";
-                break;
-            case DEVICE_UNUSED:
-                Serial << "unused";
-                break;
-            default:
-                Serial << "unknown";
-                break;
+        uint8_t deviceType = eepromData.deviceTypes[i];
+        if (deviceType < DEVICE_UNKNOWN) {
+            Serial << DEVICE_NAMES[deviceType];
+        } else {
+            Serial << "unknown";
         }
         Serial << endl;
     }
     Serial << endl;
 }
 
-byte rand_byte() {
+byte randByte() {
     byte val = 0;
     byte bit_i = 0;
     while (bit_i < 8) {
@@ -317,13 +328,23 @@ byte rand_byte() {
     return val;
 }
 
-void randomize_nonce() {
+void randomizeNonce() {
     for (uint8_t i = 0; i < crypto_secretbox_NONCEBYTES; i++) {
-        nonce[i] = rand_byte();
+        nonce[i] = randByte();
     }
 }
 
-void ir_debug() {
+void advanceNonce() {
+    //effectively nonce += 1
+    for (uint8_t i = 0; i < crypto_secretbox_NONCEBYTES; i++) {
+        nonce[i]++;
+        if (nonce[i] != 0) {
+            break;
+        }
+    }
+}
+
+void irDebug() {
     Serial << "irRecvI: " << irRecvI << " irRecvState: " << irRecvState << " irTicks: " << irTicks << " irVal: " << readIr() << endl;
     //Serial << irRecvState << " " << irVal << endl;
 }
@@ -338,6 +359,12 @@ void setup() {
     irRecvReg = resolvePinInputRegister(IR_RECV_PIN);
 
     irResume();
+
+    if (eepromData.isManager) {
+        managerSetup(&eepromData);
+    } else {
+        leafSetup(&eepromData);
+    }
 }
 
 void loop() {
