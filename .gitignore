@@ -13,3 +13,4 @@ Debug/
 kicad/gerbers
 kicad/gerbers.zip
 *.kicad_pcb-bak
+*.stl

@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP ATTINY40-SU
+D S020 Wide, 4k Flash, 256B SRAM, No EEPROM
+K AVR 8bit Microcontroller tinyAVR
+F http://www.atmel.com/images/atmel-8263-8-bit-avr-microcontroller-tinyavr-attiny40_datasheet.pdf
+$ENDCMP
+#
+#End Doc Library
