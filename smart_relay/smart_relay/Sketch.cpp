@@ -30,16 +30,16 @@ volatile uint8_t *irRecvReg;
 
 // on times seem to generally be measured as +- 100us
 #define START_ON_TIME 1000//2400
-#define ONE_ON_TIME 580//1600
-#define ZERO_ON_TIME 260//800
-#define OFF_TIME 260 // as low as possible to guarantee on-times don't fuse together
-#define SPURIOUS_TIME -100 // if closer to this than to OFF_TIME, the "tick" is ignored
+#define ONE_ON_TIME 600//1600
+#define ZERO_ON_TIME 280//800
+#define OFF_TIME 280 // as low as possible to guarantee on-times don't fuse together
+#define SPURIOUS_TIME -80 // if closer to this than to OFF_TIME, the "tick" is ignored
 #define START_ON_TICKS (START_ON_TIME/USECPERTICK)
 #define ONE_ON_TICKS (ONE_ON_TIME/USECPERTICK)
 #define ZERO_ON_TICKS (ZERO_ON_TIME/USECPERTICK)
 #define SPURIOUS_TICKS (SPURIOUS_TIME/USECPERTICK)
 
-#define BIAS_TIME -20 // actual high/mark lengths are generally measured as having this value added to them (should be negative)
+#define BIAS_TIME 0 // actual high/mark lengths are generally measured as having this value added to them (should be negative)
 #define BIAS_TICKS (BIAS_TIME/USECPERTICK)
 
 volatile uint16_t irTicks = 0;
@@ -157,6 +157,12 @@ bool irTryParse() {
         return false;
     }
 
+    if (!eepromData.isManager) {
+        // Re-enable serial
+        PRR &= ~(1<<PRUSART0);
+        Serial.begin(250000);
+    }
+
     Serial << "IR entered stop state with recvBit of " << irRecvI << endl;
 
     if (!decryptMessage((uint8_t*)irRecvBuffer)) {
@@ -230,11 +236,6 @@ ISR (TIMER_INTR_NAME)
                 return;
             }
 
-            if (irTicks <= 1) {
-                // spurious; try to pretend it is still high!
-                return;
-            }
-
             if (MATCH_TICKS_CENTER_VAL(irTicks, ZERO_ON_TICKS, ONE_ON_TICKS, START_ON_TICKS)) {
                 irRecvBuffer[irRecvI] += 1 << irRecvBitI;
                 irRecvBitI++;
@@ -248,12 +249,22 @@ ISR (TIMER_INTR_NAME)
                     irRecvBitI = 0;
                     irRecvI++;
                 }
+            } else if (irTicks < ZERO_ON_TICKS) {
+                // deemed too low for a 0 tick
+                // consider it spurious; try to pretend it is still high!
+                // but only allow 1 tick to roll over
+                irTicks = 1;
+                return;
             }
             if (irRecvI == sizeof(irRecvBuffer)) {
                 // buffer full
                 irRecvState = STATE_STOP;
                 irRecvReady = true;
                 irReceiving = false;
+                // attempt to handle immediately
+                // disable additional timer interrupts until it finishes and re-enables them
+                //TIMER_DISABLE_INTR;
+                //irTryParse();
             } else {
                 irRecvState = STATE_SPACE;
             }
@@ -273,6 +284,10 @@ ISR (TIMER_INTR_NAME)
             irRecvState = STATE_STOP;
             irRecvReady = true;
             irReceiving = false;
+            // attempt to handle immediately
+            // disable additional timer interrupts until it finishes and re-enables them
+            //TIMER_DISABLE_INTR;
+            //irTryParse();
         }
         break;
     //......................................................................

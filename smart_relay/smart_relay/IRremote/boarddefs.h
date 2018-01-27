@@ -106,7 +106,7 @@
 #endif
 
 // microseconds per clock interrupt tick
-#define USECPERTICK    20
+#define USECPERTICK    40
 
 //------------------------------------------------------------------------------
 // Define which timer to use

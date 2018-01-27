@@ -7,6 +7,8 @@
 
 #include "leaf.h"
 #include "smart_relay.h"
+#include <avr/power.h>
+#include <avr/sleep.h>
 
 bool relayAState = false;
 bool relayBState = false;
@@ -99,6 +101,9 @@ void leafHandleAuthenticatedMsg(EepromData *eepromData, uint32_t deviceAddress, 
     int32_t value = (uint32_t)dataMessage[messageI] << 24 | (uint32_t)dataMessage[messageI + 1] << 16 | (uint16_t)dataMessage[messageI + 2] << 8 | dataMessage[messageI + 3];
     messageI += 4;
 
+    // make sure timer 0 is enabled, which powers millis for timing our response actions
+    PRR &= ~(1<<PRTIM0);
+
     if (command == 's') {
         leafSetCommand(eepromData, deviceAddress, value);
     } else if (command == 'r') {
@@ -115,6 +120,8 @@ void leafHandleAuthenticatedMsg(EepromData *eepromData, uint32_t deviceAddress, 
     } else {
         Serial << "Unknown command: " << command << endl;
     }
+
+    delay(100);
 }
 
 void leafSetup(EepromData *eepromData) {
@@ -122,10 +129,30 @@ void leafSetup(EepromData *eepromData) {
     pinMode(RELAY_A_SET_PIN, OUTPUT);
     pinMode(RELAY_B_RESET_PIN, OUTPUT);
     pinMode(RELAY_B_SET_PIN, OUTPUT);
+
+    // time for last serial text to pass through
+    delay(5);
+
+    // enable IR input interrupts
+    irResume();
+
+    // Set sleep mode, SAVE keeps the Timer2 running
+    set_sleep_mode(SLEEP_MODE_EXT_STANDBY);
+    // Disable ADC, must be done before calling turning off in PRR
+    ADCSRA &= ~(1 << ADEN);
+    // no need for brown-out detector
+    sleep_bod_disable();
+    // Power Reduction Register
+    // Just leave on timer2 which we use to wakeup
+    PRR = ((1<<PRADC)|(1<<PRUSART0)|(1<<PRSPI)|(1<<PRTIM1)|(1<<PRTIM0)|(0<<PRTIM2)|(1<<PRTWI));
+    // Enter sleep mode
+    sleep_mode();
 }
 
 void leafLoop(EepromData *eepromData) {
     irTryParse();
+    PRR |= (1<<PRUSART0)|(1<<PRTIM0); // get turned back on when we receive/send a message
+    sleep_mode();
 
     /*static int32_t attempts = 0;
     if (irTickMarkReady) {

@@ -46,6 +46,7 @@ struct EepromData {
     uint8_t deviceTypes[8];
 };
 
+void irResume();
 bool irTryParse();
 void sendMessage(uint32_t deviceAddress, uint8_t* dataMessage);
 byte randByte();
