@@ -17,6 +17,8 @@ extern "C" {
 #include "IRremote.h"
 #include "IRremote/boarddefs.h"
 
+#define LEAF_UART_ENABLED false
+
 #define ADDRESS_LENGTH 4
 #define DATA_LENGTH 5
 #define CONTENT_MSG_LENGTH (ADDRESS_LENGTH + DATA_LENGTH)
@@ -53,6 +55,7 @@ byte randByte();
 void advanceNonce();
 void randomizeNonce();
 
+uint8_t getIrRecvState();
 void irDebug();
 
 #endif /* SMART_RELAY_H_ */

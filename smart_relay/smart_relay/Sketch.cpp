@@ -29,11 +29,14 @@ uint8_t irRecvRegBit;
 volatile uint8_t *irRecvReg;
 
 // on times seem to generally be measured as +- 100us
-#define START_ON_TIME 1000//2400
+#define OVER_TIME 5000
+#define WAKE_UP_TIME 1000 // time needed for receiver to wake up and begin registering the long on tick
+#define START_ON_TIME 1000 
 #define ONE_ON_TIME 600//1600
 #define ZERO_ON_TIME 280//800
 #define OFF_TIME 280 // as low as possible to guarantee on-times don't fuse together
 #define SPURIOUS_TIME -80 // if closer to this than to OFF_TIME, the "tick" is ignored
+#define OVER_TICKS (OVER_TIME/USECPERTICK)
 #define START_ON_TICKS (START_ON_TIME/USECPERTICK)
 #define ONE_ON_TICKS (ONE_ON_TIME/USECPERTICK)
 #define ZERO_ON_TICKS (ZERO_ON_TIME/USECPERTICK)
@@ -106,7 +109,7 @@ void sendMessage(uint32_t deviceAddress, uint8_t* dataMessage) {
 
     irSend.enableIROut(38); // 38khz
 
-    irSend.mark(START_ON_TIME);
+    irSend.mark(START_ON_TIME + WAKE_UP_TIME);
     irSend.space(OFF_TIME);
 
     //Serial << "nonce: ";
@@ -157,21 +160,17 @@ bool irTryParse() {
         return false;
     }
 
-    if (!eepromData.isManager) {
-        // Re-enable serial
-        PRR &= ~(1<<PRUSART0);
-        Serial.begin(250000);
-    }
-
     Serial << "IR entered stop state with recvBit of " << irRecvI << endl;
 
     if (!decryptMessage((uint8_t*)irRecvBuffer)) {
-        Serial << "Message failed to authenticate...\n";
-        Serial << "Dump of received bytes follows:\n";
-        for (uint8_t i = 0; i < sizeof(irRecvBuffer); i++) {
-            Serial << irRecvBuffer[i] << endl;
+        if (eepromData.isManager || LEAF_UART_ENABLED) {
+            Serial << "Message failed to authenticate...\n";
+            Serial << "Dump of received bytes follows:\n";
+            for (uint8_t i = 0; i < sizeof(irRecvBuffer); i++) {
+                Serial << irRecvBuffer[i] << endl;
+            }
+            Serial << "Dump over\n";
         }
-        Serial << "Dump over\n";
         irResume();
         return false;
     }
@@ -209,7 +208,7 @@ ISR (TIMER_INTR_NAME)
     //......................................................................
     case STATE_IDLE: // In the middle of a gap
         if (irVal == MARK) {
-            if (irTicks >= GAP_TICKS)  {
+            if (irTicks >= OVER_TICKS)  {
                 // Gap big enough and just ended; Record duration; Start recording transmission
                 irRecvState = STATE_MARK;
             }
@@ -225,7 +224,7 @@ ISR (TIMER_INTR_NAME)
                 irTickMarkReady = true;
             }
 
-            if (MATCH_TICKS_CENTER_VAL(irTicks, ONE_ON_TICKS, START_ON_TICKS, GAP_TICKS)) {
+            if (MATCH_TICKS_CENTER_VAL(irTicks, ONE_ON_TICKS, START_ON_TICKS, OVER_TICKS)) {
                 irRecvI = 0;
                 irRecvBitI = 0;
                 irTicks = 0;
@@ -276,7 +275,7 @@ ISR (TIMER_INTR_NAME)
         if (irVal == MARK) {  // Space just ended
             irTicks = 0;
             irRecvState = STATE_MARK;
-        } else if (irTicks > GAP_TICKS) {  // Space
+        } else if (irTicks > OVER_TICKS) {  // Space
             // A long Space, indicates gap between codes
             // Flag the current code as ready for processing
             // Switch to STOP
@@ -306,6 +305,12 @@ ISR (TIMER_INTR_NAME)
 
 void initializeFromEeprom() {
     EEPROM.get(0, eepromData);
+    // UART not useful for, and uses too much power for a leaf
+    if (!LEAF_UART_ENABLED && !eepromData.isManager) {
+        return;
+    }
+    Serial.begin(250000);
+    Serial.setTimeout(10);
     Serial << "Base Id: " << eepromData.baseId << endl;
     Serial << "Is manager: " << eepromData.isManager << endl;
     Serial << "Number of devices: " << eepromData.numDevices << endl;
@@ -364,9 +369,16 @@ void irDebug() {
     //Serial << irRecvState << " " << irVal << endl;
 }
 
+uint8_t getIrRecvState() {
+    return irRecvState;
+}
+
 void setup() {
-    Serial.begin(250000);
-    Serial.setTimeout(10);
+    // all outputs except TX RD to low output
+    for (uint8_t i = 2; i <= 13; i++) {
+        pinMode(i, OUTPUT);
+        digitalWrite(i, LOW);
+    }
 
     initializeFromEeprom();
 

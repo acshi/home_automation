@@ -24,12 +24,16 @@ void leafSetCommand(EepromData *eepromData, uint32_t deviceAddress, int32_t valu
         case DEVICE_RELAY_A:
             relayAState = value ? HIGH : LOW;
             digitalWrite(RELAY_A_SET_PIN, relayAState);
-            Serial << "Relay A turned " << (value ? "on\n" : "off\n");
+            if (LEAF_UART_ENABLED) {
+                Serial << "Relay A turned " << (value ? "on\n" : "off\n");
+            }
             break;
         case DEVICE_RELAY_B:
             relayBState = value ? HIGH : LOW;
             digitalWrite(RELAY_B_SET_PIN, relayBState);
-            Serial << "Relay B turned " << (value ? "on\n" : "off\n");
+            if (LEAF_UART_ENABLED) {
+                Serial << "Relay B turned " << (value ? "on\n" : "off\n");
+            }
             break;
         case DEVICE_LATCHING_RELAY_A:
             relayAState = value ? HIGH : LOW;
@@ -42,7 +46,9 @@ void leafSetCommand(EepromData *eepromData, uint32_t deviceAddress, int32_t valu
                 delay(15);
                 digitalWrite(RELAY_A_RESET_PIN, LOW);
             }
-            Serial << "Latching Relay A turned " << (value ? "on\n" : "off\n");
+            if (LEAF_UART_ENABLED) {
+                Serial << "Latching Relay A turned " << (value ? "on\n" : "off\n");
+            }
             break;
         case DEVICE_LATCHING_RELAY_B:
             relayBState = value ? HIGH : LOW;
@@ -55,7 +61,9 @@ void leafSetCommand(EepromData *eepromData, uint32_t deviceAddress, int32_t valu
                 delay(15);
                 digitalWrite(RELAY_B_RESET_PIN, LOW);
             }
-            Serial << "Latching Relay B turned " << (value ? "on\n" : "off\n");
+            if (LEAF_UART_ENABLED) {
+                Serial << "Latching Relay B turned " << (value ? "on\n" : "off\n");
+            }
             break;
         default:
             break;
@@ -72,11 +80,15 @@ int32_t leafReadCommand(EepromData *eepromData, uint32_t deviceAddress) {
     switch (eepromData->deviceTypes[deviceI]) {
         case DEVICE_RELAY_A:
         case DEVICE_LATCHING_RELAY_A:
-            Serial << "Reading (latching?) relay A: " << (relayAState ? "on\n" : "off\n");
+            if (LEAF_UART_ENABLED) {
+                Serial << "Reading (latching?) relay A: " << (relayAState ? "on\n" : "off\n");
+            }
             return relayAState;
         case DEVICE_RELAY_B:
         case DEVICE_LATCHING_RELAY_B:
-            Serial << "Reading (latching?) relay B: " << (relayBState ? "on\n" : "off\n");
+            if (LEAF_UART_ENABLED) {
+                Serial << "Reading (latching?) relay B: " << (relayBState ? "on\n" : "off\n");
+            }
             return relayBState;
         default:
             return -1;
@@ -84,15 +96,20 @@ int32_t leafReadCommand(EepromData *eepromData, uint32_t deviceAddress) {
 }
 
 void leafHandleAuthenticatedMsg(EepromData *eepromData, uint32_t deviceAddress, uint8_t* dataMessage) {
-    Serial << "Received authenticated message to " << deviceAddress << endl;
-    Serial << "Data bytes: ";
-    for (uint8_t i = 0; i < DATA_LENGTH; i++) {
-        Serial << dataMessage[i] << ", ";
+    if (LEAF_UART_ENABLED) {
+        Serial << "Received authenticated message to " << deviceAddress << endl;
+        Serial << "Data bytes: ";
+        for (uint8_t i = 0; i < DATA_LENGTH; i++) {
+            Serial << dataMessage[i] << ", ";
+        }
+        Serial << endl;
     }
-    Serial << endl;
 
     if (deviceAddress < eepromData->baseId || deviceAddress >= eepromData->baseId + eepromData->numDevices) {
-        Serial << "Message was not for us!\n";
+        if (LEAF_UART_ENABLED) {
+            Serial << "Message was not for us!\n";
+        }
+        set_sleep_mode(SLEEP_MODE_PWR_DOWN); // return to deep sleep
         return;
     }
 
@@ -117,11 +134,22 @@ void leafHandleAuthenticatedMsg(EepromData *eepromData, uint32_t deviceAddress, 
         message[messageI++] = value & 0xff;
         advanceNonce();
         sendMessage(deviceAddress, message);
-    } else {
+    } else if (LEAF_UART_ENABLED) {
         Serial << "Unknown command: " << command << endl;
     }
 
-    delay(100);
+    if (LEAF_UART_ENABLED) {
+        delay(10); // time to finish sending message
+    }
+
+    PRR |= (1<<PRTIM0); // done with timer 0
+}
+
+ISR(INT0_vect) {
+    // Use standby sleep as we receive the IR communication
+    set_sleep_mode(SLEEP_MODE_EXT_STANDBY);
+    EIMSK = 0; // don't continue firing this interrupt
+    Serial << "INT\n";
 }
 
 void leafSetup(EepromData *eepromData) {
@@ -136,8 +164,12 @@ void leafSetup(EepromData *eepromData) {
     // enable IR input interrupts
     irResume();
 
+    // Prepare wakeup interrupt from low level on IR_RECV pin, which is also INT0
+    EICRA = 0;
+    EIMSK = (1<<INT0);
+
     // Set sleep mode, SAVE keeps the Timer2 running
-    set_sleep_mode(SLEEP_MODE_EXT_STANDBY);
+    set_sleep_mode(SLEEP_MODE_PWR_DOWN);
     // Disable ADC, must be done before calling turning off in PRR
     ADCSRA &= ~(1 << ADEN);
     // no need for brown-out detector
@@ -145,13 +177,26 @@ void leafSetup(EepromData *eepromData) {
     // Power Reduction Register
     // Just leave on timer2 which we use to wakeup
     PRR = ((1<<PRADC)|(1<<PRUSART0)|(1<<PRSPI)|(1<<PRTIM1)|(1<<PRTIM0)|(0<<PRTIM2)|(1<<PRTWI));
+    if (LEAF_UART_ENABLED) {
+        // Enable serial
+        PRR &= ~(1<<PRUSART0);
+        Serial.begin(250000);
+    }
     // Enter sleep mode
     sleep_mode();
 }
 
 void leafLoop(EepromData *eepromData) {
     irTryParse();
-    PRR |= (1<<PRUSART0)|(1<<PRTIM0); // get turned back on when we receive/send a message
+    if (LEAF_UART_ENABLED) {
+        PRR &= ~(1<<PRTIM0);
+        delayMicroseconds(20);
+        PRR |= (1<<PRTIM0);
+    }
+    if (getIrRecvState() == STATE_IDLE) {
+        EIMSK = (1<<INT0); // make sure we can exit deep sleep
+        set_sleep_mode(SLEEP_MODE_PWR_DOWN); // return to deep sleep
+    }
     sleep_mode();
 
     /*static int32_t attempts = 0;
