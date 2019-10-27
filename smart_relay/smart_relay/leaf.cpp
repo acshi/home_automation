@@ -9,6 +9,7 @@
 #include "smart_relay.h"
 #include <avr/power.h>
 #include <avr/sleep.h>
+#include <avr/wdt.h>
 
 bool relayAState = false;
 bool relayBState = false;
@@ -24,16 +25,16 @@ void leafSetCommand(EepromData *eepromData, uint32_t deviceAddress, int32_t valu
         case DEVICE_RELAY_A:
             relayAState = value ? HIGH : LOW;
             digitalWrite(RELAY_A_SET_PIN, relayAState);
-            if (LEAF_UART_ENABLED) {
-                Serial << "Relay A turned " << (value ? "on\n" : "off\n");
-            }
+            //if (LEAF_UART_ENABLED) {
+                //Serial << "Relay A turned " << (value ? "on\n" : "off\n");
+            //}
             break;
         case DEVICE_RELAY_B:
             relayBState = value ? HIGH : LOW;
             digitalWrite(RELAY_B_SET_PIN, relayBState);
-            if (LEAF_UART_ENABLED) {
-                Serial << "Relay B turned " << (value ? "on\n" : "off\n");
-            }
+            //if (LEAF_UART_ENABLED) {
+                //Serial << "Relay B turned " << (value ? "on\n" : "off\n");
+            //}
             break;
         case DEVICE_LATCHING_RELAY_A:
             relayAState = value ? HIGH : LOW;
@@ -119,7 +120,7 @@ void leafHandleAuthenticatedMsg(EepromData *eepromData, uint32_t deviceAddress, 
     messageI += 4;
 
     // make sure timer 0 is enabled, which powers millis for timing our response actions
-    PRR &= ~(1<<PRTIM0);
+    PRR0 &= ~(1<<PRTIM0);
 
     if (command == 's') {
         leafSetCommand(eepromData, deviceAddress, value);
@@ -142,21 +143,29 @@ void leafHandleAuthenticatedMsg(EepromData *eepromData, uint32_t deviceAddress, 
         delay(10); // time to finish sending message
     }
 
-    PRR |= (1<<PRTIM0); // done with timer 0
+    PRR0 |= (1<<PRTIM0); // done with timer 0
 }
 
 ISR(INT0_vect) {
     // Use standby sleep as we receive the IR communication
     set_sleep_mode(SLEEP_MODE_EXT_STANDBY);
     EIMSK = 0; // don't continue firing this interrupt
-    Serial << "INT\n";
+    //Serial << "INT\n";
 }
 
-void leafSetup(EepromData *eepromData) {
+void leafSetupPins() {
+    digitalWrite(RELAY_A_RESET_PIN, LOW);
+    digitalWrite(RELAY_A_SET_PIN, LOW);
+    digitalWrite(RELAY_B_RESET_PIN, LOW);
+    digitalWrite(RELAY_B_SET_PIN, LOW);
     pinMode(RELAY_A_RESET_PIN, OUTPUT);
     pinMode(RELAY_A_SET_PIN, OUTPUT);
     pinMode(RELAY_B_RESET_PIN, OUTPUT);
     pinMode(RELAY_B_SET_PIN, OUTPUT);
+}
+
+void leafSetup(EepromData *eepromData) {
+    leafSetupPins();
 
     // time for last serial text to pass through
     delay(5);
@@ -168,35 +177,39 @@ void leafSetup(EepromData *eepromData) {
     EICRA = 0;
     EIMSK = (1<<INT0);
 
-    // Set sleep mode, SAVE keeps the Timer2 running
+    // Full power down until we start receiving IR communication
     set_sleep_mode(SLEEP_MODE_PWR_DOWN);
     // Disable ADC, must be done before calling turning off in PRR
     ADCSRA &= ~(1 << ADEN);
     // no need for brown-out detector
     sleep_bod_disable();
-    // Power Reduction Register
-    // Just leave on timer2 which we use to wakeup
-    PRR = ((1<<PRADC)|(1<<PRUSART0)|(1<<PRSPI)|(1<<PRTIM1)|(1<<PRTIM0)|(0<<PRTIM2)|(1<<PRTWI));
+    // or the watch-dog timer
+    wdt_disable();
+    // Power Reduction Registers
+    PRR0 = (1<<PRADC)|(1<<PRUSART0)|(1<<PRSPI0)|(1<<PRTIM1)|(1<<PRUSART1)|(1<<PRTIM0)|(0<<PRTIM2)|(1<<PRTWI0);
+    PRR1 = (1<<PRTIM3)|(1<<PRSPI1)|(1<<PRTIM4)|(1<<PRPTC)|(1<<PRTWI1);
     if (LEAF_UART_ENABLED) {
-        // Enable serial
-        PRR &= ~(1<<PRUSART0);
-        Serial.begin(250000);
+        // only for debugging
+        PRR0 &= ~(1<<PRUSART0);
+        Serial.begin(115200);
     }
-    // Enter sleep mode
+
+    // will only return after an interrupt wakes up the controller
     sleep_mode();
 }
 
 void leafLoop(EepromData *eepromData) {
     irTryParse();
     if (LEAF_UART_ENABLED) {
-        PRR &= ~(1<<PRTIM0);
+        PRR0 &= ~(1<<PRTIM0);
         delayMicroseconds(20);
-        PRR |= (1<<PRTIM0);
+        PRR0 |= (1<<PRTIM0);
     }
     if (getIrRecvState() == STATE_IDLE) {
         EIMSK = (1<<INT0); // make sure we can exit deep sleep
         set_sleep_mode(SLEEP_MODE_PWR_DOWN); // return to deep sleep
     }
+    // will only return after an interrupt wakes up the controller
     sleep_mode();
 
     /*static int32_t attempts = 0;

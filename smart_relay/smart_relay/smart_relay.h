@@ -17,7 +17,7 @@ extern "C" {
 #include "IRremote.h"
 #include "IRremote/boarddefs.h"
 
-#define LEAF_UART_ENABLED false
+#define LEAF_UART_ENABLED true
 
 #define ADDRESS_LENGTH 4
 #define DATA_LENGTH 5

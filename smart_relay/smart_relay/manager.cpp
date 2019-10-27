@@ -66,7 +66,7 @@ void managerReadCommand(EepromData *eepromData, uint32_t deviceAddress) {
 }
 
 void managerSetup(EepromData *eepromData) {
-
+    leafSetupPins();
 }
 
 void managerLoop(EepromData *eepromData) {

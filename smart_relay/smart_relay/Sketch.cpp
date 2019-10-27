@@ -309,7 +309,7 @@ void initializeFromEeprom() {
     if (!LEAF_UART_ENABLED && !eepromData.isManager) {
         return;
     }
-    Serial.begin(250000);
+    Serial.begin(115200);
     Serial.setTimeout(10);
     Serial << "Base Id: " << eepromData.baseId << endl;
     Serial << "Is manager: " << eepromData.isManager << endl;
@@ -374,10 +374,10 @@ uint8_t getIrRecvState() {
 }
 
 void setup() {
-    // all outputs except TX RD to low output
-    for (uint8_t i = 2; i <= 13; i++) {
-        pinMode(i, OUTPUT);
-        digitalWrite(i, LOW);
+    // default all pins to be input with pull-up (except tx/rx?)
+    // this configuration gives the lowest leakage current
+    for (uint8_t i = 0; i <= A7; i++) {
+        pinMode(i, INPUT_PULLUP);
     }
 
     initializeFromEeprom();

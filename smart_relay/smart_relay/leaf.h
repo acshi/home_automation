@@ -14,6 +14,7 @@
 void leafSetCommand(EepromData *eepromData, uint32_t deviceAddress, int32_t value);
 int32_t leafReadCommand(EepromData *eepromData, uint32_t deviceAddress);
 void leafHandleAuthenticatedMsg(EepromData *eepromData, uint32_t deviceAddress, uint8_t *dataMessage);
+void leafSetupPins();
 void leafSetup(EepromData *eepromData);
 void leafLoop(EepromData *eepromData);
 
