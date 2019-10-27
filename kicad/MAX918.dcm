@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP MAX918ESA
+D Comparator with Voltage Reference Open-Drain, Rail-to-Rail, 8-SOIC
+K single comparator
+F https://datasheets.maximintegrated.com/en/ds/MAX917-MAX920.pdf
+$ENDCMP
+#
+#End Doc Library
