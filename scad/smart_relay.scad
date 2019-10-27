@@ -93,7 +93,7 @@ module trapezoid(width1, width2, height, thickness, shape=0) {
                                        [(1+shape)* diff_w/2 + width2, height], [width1, 0]]);
 }
 
-wall_t = 4;
+wall_t = 2.8;
 case_w = 80;
 case_h = 140;
 latch_w = 20;
@@ -101,12 +101,11 @@ latch_w1 = 30;
 latch_w2 = 15;
 latch_h = 8;
 latch_y = 8;
-latch_t = 4;
 latch_reach = 52;
 
 module latch() {
     knib_h = latch_h;
-    knib_l = wall_t;
+    knib_l = 2.5;
     knib_end_h = 2;
     t = wall_t;
     rotate([-90, 0, 0])
@@ -114,6 +113,9 @@ module latch() {
     translate([latch_w1-latch_w2/2, 0, -latch_reach+knib_h])
     rotate([0, 90, 180])
         trapezoid(knib_h, knib_end_h, knib_l, latch_w2, -0.5);
+    translate([0, t, 0])
+    rotate([0, 90, 0])
+    trapezoid(8, 0, t, latch_w1, -1);
 }
 
 module case_top() {
@@ -125,26 +127,24 @@ module case_top() {
             translate([wall_t, wall_t, 0])
                 cube([case_w-2*wall_t, case_h-2*wall_t, case_t-wall_t]);
             translate([wall_t/2-clear, wall_t/2-clear, 0])
-                    difference() {
-                        cube([case_w-wall_t+clear*2, case_h-wall_t+clear*2, wall_t]);
-                        translate([wall_t/2+clear*2, wall_t/2+clear*2, 0])
-                            cube([case_w-wall_t*2-clear*2, case_h-wall_t*2-clear*2, wall_t]);
-                    }
+                cube([case_w-wall_t+clear*2, case_h-wall_t+clear*2, wall_t*2]);
         }
         translate([case_w/2-ac_top_l/2, case_h/2-ac_h/2-ac_offset_y/2, case_t - ac_depth + 0.001])
-            %ac_socket(false);
+            ac_socket(false);
         translate([case_w/2, case_h/2, case_t-wall_t])
             cylinder(r=2, h=wall_t);
         translate([case_w/2, case_h/2, case_t-wall_t/2])
             cylinder(r=4, h=wall_t/2);
-        translate([case_w/2-24, 20, case_t-wall_t])
-            cylinder(r=3, h=wall_t);
+        translate([case_w/2-24, 20-7.5/2, case_t-wall_t])
+            cube([5.4, 7.5, wall_t]); //cylinder(r=3, h=wall_t);
         translate([case_w/2+24, 20, case_t-wall_t])
             cylinder(r=3, h=wall_t);
+        translate([case_w/2+24, 12, case_t-wall_t])
+            cylinder(r=3, h=wall_t);
     }
-    translate([case_w/2-latch_w1/2, latch_t, case_t])
+    translate([case_w/2-latch_w1/2, wall_t+1, case_t])
             latch();
-    translate([case_w/2+latch_w1/2, case_h-latch_t, case_t])
+    *translate([case_w/2+latch_w1/2, case_h-wall_t-1, case_t])
         rotate([0, 0, 180])
         latch();
 }
@@ -162,7 +162,10 @@ module screw_spacer(spacer_r=6.5) {
 module case_bottom() {
     case_t = 34;
     clear = 0.6;
-    in_wall_t = 2.4;
+    in_wall_t = 1.6;
+    cord_hole_y = 20.5;
+    cord_hole_x = 14;
+    cord_hole_d = 11;
     difference() {
         union() {
             render() difference() {
@@ -171,13 +174,20 @@ module case_bottom() {
                     cube([case_w-2*wall_t, case_h-2*wall_t, case_t]);
                 translate([case_w/2-latch_w/2, 0, latch_y])
                     cube([latch_w, wall_t, latch_h]);
-                translate([case_w/2-latch_w/2, case_h-wall_t, latch_y])
+                *translate([case_w/2-latch_w/2, case_h-wall_t, latch_y])
                     cube([latch_w, wall_t, latch_h]);
-                translate([0, 0, case_t-wall_t])
+                translate([case_w - cord_hole_x, wall_t+0.01, cord_hole_y]) {
+                    rotate([90, 0, 0])
+                        cylinder(d=cord_hole_d, h=wall_t+0.02);
+                    // temporary(?) slot for the cord to be put in after being assembled
+                    translate([-cord_hole_d/2, -wall_t-0.02, 0])
+                        cube([cord_hole_d, wall_t+0.03, 20]);
+                }
+                translate([0, 0, case_t-wall_t*2])
                     difference() {
-                        cube([case_w, case_h, wall_t]);
+                        cube([case_w, case_h, wall_t*2+0.01]);
                         translate([wall_t/2, wall_t/2, 0])
-                            cube([case_w-wall_t, case_h-wall_t, wall_t]);
+                            cube([case_w-wall_t, case_h-wall_t, wall_t*2]);
                     }
                 translate([10-clear, 108-clear, 0])
                     cube([58.5+clear*2, 17+clear*2, 20]);
@@ -192,30 +202,39 @@ module case_bottom() {
                 translate([53.34, 76.835, 0])
                     screw_spacer(5.5);
             }
+            // battery holder
             render() translate([10, 108, 0]) difference() {
                 translate([-in_wall_t-clear, -in_wall_t-clear, 0])
                     cube([58.5+in_wall_t*2+clear*2, 17+in_wall_t*2+clear*2, 20+in_wall_t+clear]);
                 translate([-clear, -clear, 0])
-                    cube([58.5+clear*2, 17+clear*2, 20]);
-                translate([12, 17/2, 20])
+                    cube([58.5+clear*2, 17+clear*2, 20+clear]);
+                translate([12, 17/2, 20+clear])
                     cylinder(r=2, h=in_wall_t+clear);
-                translate([12+34.5, 17/2, 20])
+                translate([12+34.5, 17/2, 20+clear])
                     cylinder(r=2, h=in_wall_t+clear);
-                translate([1.6, 17/2, 20])
-                    cylinder(r=1.25, h=in_wall_t+clear);
-                translate([1.6+55.3, 17/2, 20])
-                    cylinder(r=1.25, h=in_wall_t+clear);
-                translate([56.2, 0.5, 20])
-                    cylinder(r=1.25, h=in_wall_t+clear);
+                translate([12, 17/2, 20+clear])
+                    cylinder(r=2.8, h=in_wall_t/2);
+                translate([12+34.5, 17/2, 20+clear])
+                    cylinder(r=2.8, h=in_wall_t/2);
+                translate([1.6, 17/2, 20+clear])
+                    cylinder(r=1, h=in_wall_t+clear);
+                translate([1.6+55.3, 17/2, 20+clear])
+                    cylinder(r=1, h=in_wall_t+clear);
+                translate([56.2, 15.5, 20+clear])
+                    cylinder(r=1, h=in_wall_t+clear);
+                translate([-clear, -clear, 20+clear])
+                    cube([5+clear, 17+clear*2, in_wall_t/2]);
+                translate([58.5-5, -clear, 20+clear])
+                    cube([5+clear, 17+clear*2, in_wall_t/2]);
             }
         }
     }
 }
 
 //ac_socket();
-case_top();
+*case_top();
 
-*translate([0, 0, -30-0]) {
+translate([0, 0, -30-0]) {
     case_bottom();
 
     translate([10, case_h/2 - 84.455/2 - 12, 1+spacer_t])
@@ -223,12 +242,12 @@ case_top();
         translate([-101, 83, 0])
             %import("circuit.stl");
         translate([25.8, -41, 1])
-            #cube([12.7, 29, 15.7]);
+            %cube([12.7, 29, 15.7]);
         translate([9.4, -41, 1])
-            #cube([12.7, 29, 15.7]);
+            %cube([12.7, 29, 15.7]);
         translate([45.5, -56.6, -9])
-            #cube([17, 43, 9]);
+            %cube([17, 43, 9]);
     }
     *translate([10, 108, 0])
-            #cube([58.5, 17, 20]);
+            %cube([58.5, 17, 20]);
 }
